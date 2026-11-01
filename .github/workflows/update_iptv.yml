@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - playlist_afrique.m3u
   schedule:
     - cron: '0 0 * * *' # S'exécute tous les jours à minuit
   workflow_dispatch: # Permet un déclenchement manuel depuis l'interface GitHub
@@ -35,28 +37,78 @@ jobs:
 
         import requests
 
-        african_countries = {
-            "Algeria", "Angola", "Benin", "Botswana", "Burkina Faso", "Burundi",
-            "Cabo Verde", "Cameroon", "Central African Republic", "Chad", "Comoros",
-            "Congo", "Democratic Republic of the Congo", "Djibouti", "Egypt",
-            "Equatorial Guinea", "Eritrea", "Eswatini", "Ethiopia", "Gabon",
-            "Gambia", "Ghana", "Guinea", "Guinea-Bissau", "Ivory Coast", "Kenya",
-            "Lesotho", "Liberia", "Libya", "Madagascar", "Malawi", "Mali",
-            "Mauritania", "Mauritius", "Morocco", "Mozambique", "Namibia", "Niger",
-            "Nigeria", "Rwanda", "Sao Tome and Principe", "Senegal", "Seychelles",
-            "Sierra Leone", "Somalia", "South Africa", "South Sudan", "Sudan",
-            "Tanzania", "Togo", "Tunisia", "Uganda", "Zambia", "Zimbabwe",
+        regions = {
+            "Afrique": {
+                "Algeria", "Angola", "Benin", "Botswana", "Burkina Faso",
+                "Burundi", "Cabo Verde", "Cameroon", "Central African Republic",
+                "Chad", "Comoros", "Congo", "Democratic Republic of the Congo",
+                "Djibouti", "Egypt", "Equatorial Guinea", "Eritrea", "Eswatini",
+                "Ethiopia", "Gabon", "Gambia", "Ghana", "Guinea", "Guinea-Bissau",
+                "Ivory Coast", "Kenya", "Lesotho", "Liberia", "Libya", "Madagascar",
+                "Malawi", "Mali", "Mauritania", "Mauritius", "Morocco", "Mozambique",
+                "Namibia", "Niger", "Nigeria", "Rwanda", "Sao Tome and Principe",
+                "Senegal", "Seychelles", "Sierra Leone", "Somalia", "South Africa",
+                "South Sudan", "Sudan", "Tanzania", "Togo", "Tunisia", "Uganda",
+                "Zambia", "Zimbabwe",
+            },
+            "Europe": {
+                "Albania", "Andorra", "Austria", "Belarus", "Belgium",
+                "Bosnia and Herzegovina", "Bulgaria", "Croatia", "Cyprus",
+                "Czech Republic", "Denmark", "Estonia", "Finland", "France",
+                "Germany", "Greece", "Hungary", "Iceland", "Ireland", "Italy",
+                "Kosovo", "Latvia", "Liechtenstein", "Lithuania", "Luxembourg",
+                "Malta", "Moldova", "Monaco", "Montenegro", "Netherlands",
+                "North Macedonia", "Norway", "Poland", "Portugal", "Romania",
+                "Russia", "San Marino", "Serbia", "Slovakia", "Slovenia", "Spain",
+                "Sweden", "Switzerland", "Ukraine", "United Kingdom", "Vatican City",
+            },
+            "Amériques": {
+                "Antigua and Barbuda", "Argentina", "Bahamas", "Barbados", "Belize",
+                "Bermuda", "Bolivia", "Brazil", "Canada", "Chile", "Colombia",
+                "Costa Rica", "Cuba", "Dominica", "Dominican Republic", "Ecuador",
+                "El Salvador", "Grenada", "Guatemala", "Guyana", "Haiti", "Honduras",
+                "Jamaica", "Mexico", "Nicaragua", "Panama", "Paraguay", "Peru",
+                "Saint Kitts and Nevis", "Saint Lucia", "Saint Vincent and the Grenadines",
+                "Suriname", "Trinidad and Tobago", "United States", "Uruguay",
+                "Venezuela",
+            },
+            "Moyen-Orient": {
+                "Bahrain", "Iran", "Iraq", "Israel", "Jordan", "Kuwait", "Lebanon",
+                "Oman", "Palestine", "Qatar", "Saudi Arabia", "Syria", "Turkey",
+                "United Arab Emirates", "Yemen",
+            },
+            "Asie": {
+                "Afghanistan", "Armenia", "Azerbaijan", "Bangladesh", "Bhutan",
+                "Brunei", "Cambodia", "China", "Georgia", "Hong Kong", "India",
+                "Indonesia", "Japan", "Kazakhstan", "Kyrgyzstan", "Laos", "Macau",
+                "Malaysia", "Maldives", "Mongolia", "Myanmar", "Nepal", "North Korea",
+                "Pakistan", "Philippines", "Singapore", "South Korea", "Sri Lanka",
+                "Taiwan", "Tajikistan", "Thailand", "Timor-Leste", "Turkmenistan",
+                "Uzbekistan", "Vietnam",
+            },
+            "Océanie": {
+                "Australia", "Fiji", "Kiribati", "Marshall Islands",
+                "Micronesia", "Nauru", "New Zealand", "Palau", "Papua New Guinea",
+                "Samoa", "Solomon Islands", "Tonga", "Tuvalu", "Vanuatu",
+            },
         }
         country_aliases = {
-            "Cape Verde",
-            "Cote d'Ivoire",
-            "Côte d'Ivoire",
-            "Congo-Brazzaville",
-            "DR Congo",
-            "Congo-Kinshasa",
-            "Swaziland",
-            "Sao Tome & Principe",
-            "São Tomé and Príncipe",
+            "Cape Verde": "Cabo Verde",
+            "Cote d'Ivoire": "Ivory Coast",
+            "Côte d'Ivoire": "Ivory Coast",
+            "Congo-Brazzaville": "Congo",
+            "DR Congo": "Democratic Republic of the Congo",
+            "Congo-Kinshasa": "Democratic Republic of the Congo",
+            "Swaziland": "Eswatini",
+            "Sao Tome & Principe": "Sao Tome and Principe",
+            "São Tomé and Príncipe": "Sao Tome and Principe",
+            "United States of America": "United States",
+            "Türkiye": "Turkey",
+            "Republic of Korea": "South Korea",
+            "Democratic People's Republic of Korea": "North Korea",
+            "Czechia": "Czech Republic",
+            "The Gambia": "Gambia",
+            "The Bahamas": "Bahamas",
         }
 
         def normalize(value):
@@ -64,8 +116,15 @@ jobs:
             value = value.encode("ascii", "ignore").decode("ascii").casefold()
             return re.sub(r"[^a-z0-9]+", " ", value).strip()
 
-        country_names = {normalize(country) for country in african_countries}
-        country_names.update(normalize(alias) for alias in country_aliases)
+        country_regions = {
+            normalize(country): region
+            for region, countries in regions.items()
+            for country in countries
+        }
+        country_regions.update(
+            (normalize(alias), country_regions[normalize(country)])
+            for alias, country in country_aliases.items()
+        )
 
         response = requests.get(
             "https://iptv-org.github.io/iptv/index.country.m3u", timeout=60
@@ -76,25 +135,54 @@ jobs:
         current_inf = None
         keep = False
         channel_count = 0
+        region_counts = {region: 0 for region in regions}
+        region_counts["Autres"] = 0
 
         for line in response.text.splitlines():
             if line.startswith("#EXTINF:"):
                 current_inf = line
                 group = re.search(r'group-title="([^"]*)"', line)
                 country = group.group(1) if group else ""
-                channel_metadata = normalize(line).split()
                 premium_channel = (
                     re.search(r"\bcanal\s*\+|\bcanal\s+plus\b", line, re.IGNORECASE)
-                    or "bein" in channel_metadata
+                    or re.search(r"\bbein\b", line, re.IGNORECASE)
                 )
-                keep = (
-                    normalize(country) in country_names
-                    and not premium_channel
-                )
+                region = country_regions.get(normalize(country), "Autres")
+                keep = not premium_channel
+                if keep and group:
+                    current_inf = (
+                        line[:group.start(1)]
+                        + region
+                        + line[group.end(1):]
+                    )
+                elif keep:
+                    region = "Autres"
+
+                if keep:
+                    current_inf = re.sub(
+                        r'(?<!\S)tvg-country="[^"]*"',
+                        "",
+                        current_inf,
+                    ).rstrip()
+                    title_separator = current_inf.find(",")
+                    if title_separator != -1:
+                        if not group:
+                            current_inf = (
+                                current_inf[:title_separator]
+                                + ' group-title="Autres"'
+                                + current_inf[title_separator:]
+                            )
+                            title_separator = current_inf.find(",")
+                        current_inf = (
+                            current_inf[:title_separator]
+                            + f' tvg-country="{country}"'
+                            + current_inf[title_separator:]
+                        )
             elif line.startswith("http"):
                 if keep and current_inf:
                     output_lines.extend((current_inf, line))
                     channel_count += 1
+                    region_counts[region] += 1
                 current_inf = None
                 keep = False
 
@@ -103,7 +191,10 @@ jobs:
 
         with open("playlist_afrique.m3u", "w", encoding="utf-8") as playlist:
             playlist.write("\n".join(output_lines) + "\n")
-        print(f"Playlist africaine générée : {channel_count} chaînes.")
+        print(f"Playlist générée : {channel_count} chaînes.")
+        for region, count in region_counts.items():
+            if count:
+                print(f"{region} : {count} chaînes")
         PY
 
     - name: Commit and Push changes
@@ -111,5 +202,5 @@ jobs:
         git config --global user.name 'GitHub Action'
         git config --global user.email 'action@github.com'
         git add playlist_afrique.m3u
-        git commit -m "Mise à jour automatique de la playlist africaine" || exit 0
+        git commit -m "Mise à jour automatique des chaînes par région" || exit 0
         git push
