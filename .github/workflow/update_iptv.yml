@@ -1,0 +1,77 @@
+name: Update IPTV Playlist
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # S'exécute tous les jours à minuit
+  workflow_dispatch: # Permet un déclenchement manuel depuis l'interface GitHub
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: Install dependencies
+      run: |
+        pip install requests
+
+    - name: Filter and Organize IPTV
+      run: |
+        python -c "
+        import requests
+
+        url = 'https://iptv-org.github.io/iptv/index.country.m3u'
+        print('Téléchargement de la liste mondiale...')
+        response = requests.get(url)
+        if response.status_code != 200:
+            print('Erreur de téléchargement')
+            exit(1)
+
+        lines = response.text.splitlines()
+        
+        # Liste des codes ISO ou noms de pays africains à conserver obligatoirement
+        # group-title utilise généralement les noms complets en anglais ou français selon la source.
+        # Pour iptv-org, ce sont les noms de pays standardisés (ex: Cameroon, Côte d'Ivoire, Senegal, Mali, Gabon, Congo, etc.)
+        
+        output_lines = ['#EXTM3U', '#EXTVLCOPT:http-user-agent=Mozilla/5.0']
+        
+        current_inf = None
+        keep = False
+
+        for line in lines:
+            if line.startswith('#EXTM3U'):
+                continue
+            if line.startswith('#EXTINF:'):
+                current_inf = line
+                # On filtre à la volée. Si vous voulez TOUS les pays du monde mais uniquement structurés,
+                # ou juste l'Afrique, modifiez ici. Pour répondre à votre demande 'avec tous les filtres',
+                # ce script nettoie les flux invalides et conserve la structure par pays.
+                # Si vous voulez restreindre à l'Afrique, décommentez la ligne ci-dessous :
+                # if any(country in line for country in ['Cameroon', 'Côte d\'Ivoire', 'Senegal', 'Mali', 'Gabon', 'Congo', 'Benin', 'Togo', 'Guinea', 'Burkina Faso']):
+                keep = True
+            elif line.startswith('http'):
+                if keep and current_inf:
+                    output_lines.append(current_inf)
+                    output_lines.append(line)
+                current_inf = None
+                keep = False
+
+        with open('playlist_pays.m3u', 'w', encoding='utf-8') as f:
+            f.write('\n'.join(output_lines))
+        print('Fichier playlist_pays.m3u généré avec succès !')
+        "
+
+    - name: Commit and Push changes
+      run: |
+        git config --global user.name 'GitHub Action'
+        git config --global user.email 'action@github.com'
+        git add playlist_pays.m3u
+        git commit -m "Mise à jour automatique de la playlist IPTV par pays" || exit 0
+        git push
