@@ -6,6 +6,7 @@ on:
       - main
     paths-ignore:
       - playlist_afrique.m3u
+      - playlist_bouquet.m3u
   schedule:
     - cron: '0 0 * * *' # S'exécute tous les jours à minuit
   workflow_dispatch: # Permet un déclenchement manuel depuis l'interface GitHub
@@ -29,7 +30,7 @@ jobs:
       run: |
         pip install requests
 
-    - name: Select French Channels and Organize by Region
+    - name: Select French and English Channels and Build Bouquets
       run: |
         python <<'PY'
         import re
@@ -145,83 +146,135 @@ jobs:
                     country_by_channel[channel_id.group(1)] = country.group(1)
                 current_inf = None
 
-        french_response = requests.get(
-            "https://iptv-org.github.io/iptv/languages/fra.m3u", timeout=60
-        )
-        french_response.raise_for_status()
+        bouquet_categories = {
+            "sports": "Sports",
+            "sport": "Sports",
+            "movies": "Films et séries",
+            "series": "Films et séries",
+            "entertainment": "Divertissement",
+            "music": "Musique",
+            "kids": "Jeunesse",
+            "children": "Jeunesse",
+            "news": "Actualités",
+            "culture": "Culture",
+            "documentary": "Documentaires",
+            "general": "Généralistes",
+            "religious": "Religieuses",
+        }
 
-        output_lines = ["#EXTM3U", "#EXTVLCOPT:http-user-agent=Mozilla/5.0"]
-        current_inf = None
-        keep = False
-        channel_count = 0
+        def set_attribute(metadata, name, value):
+            attribute = re.compile(rf'(?<!\S){re.escape(name)}="[^"]*"')
+            replacement = f'{name}="{value}"'
+            if attribute.search(metadata):
+                return attribute.sub(replacement, metadata, count=1)
+            title_separator = metadata.find(",")
+            if title_separator == -1:
+                return metadata
+            return (
+                metadata[:title_separator]
+                + f" {replacement}"
+                + metadata[title_separator:]
+            )
+
+        main_entries = []
+        bouquet_entries = []
+        seen_urls = set()
         region_counts = {region: 0 for region in regions}
         region_counts["Autres"] = 0
+        bouquet_counts = {category: 0 for category in set(bouquet_categories.values())}
+        french_channel_count = 0
+        english_channel_count = 0
 
-        for line in french_response.text.splitlines():
-            if line.startswith("#EXTINF:"):
-                current_inf = line
-                channel_id = re.search(r'tvg-id="([^"]*)"', line)
-                country = country_by_channel.get(
-                    channel_id.group(1) if channel_id else "", ""
-                )
-                premium_channel = (
-                    re.search(r"\bcanal\s*\+|\bcanal\s+plus\b", line, re.IGNORECASE)
-                    or re.search(r"\bbein\b", line, re.IGNORECASE)
-                )
-                region = country_regions.get(normalize(country), "Autres")
-                keep = bool(channel_id and country and not premium_channel)
+        for language_code in ("fra", "eng"):
+            language_response = requests.get(
+                f"https://iptv-org.github.io/iptv/languages/{language_code}.m3u",
+                timeout=60,
+            )
+            language_response.raise_for_status()
+            current_inf = None
 
-                if keep:
-                    group = re.search(r'group-title="([^"]*)"', current_inf)
-                    if group:
-                        current_inf = (
-                            current_inf[:group.start(1)]
-                            + region
-                            + current_inf[group.end(1):]
+            for line in language_response.text.splitlines():
+                if line.startswith("#EXTINF:"):
+                    current_inf = line
+                elif line.startswith("http") and current_inf:
+                    channel_id = re.search(r'tvg-id="([^"]*)"', current_inf)
+                    country = country_by_channel.get(
+                        channel_id.group(1) if channel_id else "", ""
+                    )
+                    premium_channel = (
+                        re.search(
+                            r"\bcanal\s*\+|\bcanal\s+plus\b",
+                            current_inf,
+                            re.IGNORECASE,
                         )
-                    else:
-                        title_separator = current_inf.find(",")
-                        if title_separator != -1:
-                            current_inf = (
-                                current_inf[:title_separator]
-                                + f' group-title="{region}"'
-                                + current_inf[title_separator:]
+                        or re.search(r"\bbein\b", current_inf, re.IGNORECASE)
+                    )
+
+                    if channel_id and country and not premium_channel and line not in seen_urls:
+                        seen_urls.add(line)
+                        region = country_regions.get(normalize(country), "Autres")
+                        regional_metadata = set_attribute(
+                            current_inf, "group-title", region
+                        )
+                        regional_metadata = set_attribute(
+                            regional_metadata, "tvg-country", country
+                        )
+                        main_entries.append((regional_metadata, line))
+                        region_counts[region] += 1
+
+                        if language_code == "fra":
+                            french_channel_count += 1
+                        else:
+                            english_channel_count += 1
+
+                        original_group = re.search(
+                            r'group-title="([^"]*)"', current_inf
+                        )
+                        genre = normalize(original_group.group(1)) if original_group else ""
+                        category = bouquet_categories.get(genre)
+                        if category:
+                            bouquet_metadata = set_attribute(
+                                current_inf, "group-title", category
                             )
-                    current_inf = re.sub(
-                        r'(?<!\S)tvg-country="[^"]*"',
-                        "",
-                        current_inf,
-                    ).rstrip()
-                    title_separator = current_inf.find(",")
-                    if title_separator != -1:
-                        current_inf = (
-                            current_inf[:title_separator]
-                            + f' tvg-country="{country}"'
-                            + current_inf[title_separator:]
-                        )
-            elif line.startswith("http"):
-                if keep and current_inf:
-                    output_lines.extend((current_inf, line))
-                    channel_count += 1
-                    region_counts[region] += 1
-                current_inf = None
-                keep = False
+                            bouquet_metadata = set_attribute(
+                                bouquet_metadata, "tvg-country", country
+                            )
+                            bouquet_entries.append((bouquet_metadata, line))
+                            bouquet_counts[category] += 1
+                    current_inf = None
 
-        if channel_count == 0:
-            raise SystemExit("Aucune chaîne africaine trouvée; playlist non générée.")
+        if not main_entries:
+            raise SystemExit("Aucune chaîne française ou anglaise trouvée.")
+        if not bouquet_entries:
+            raise SystemExit("Aucune chaîne gratuite de bouquet trouvée.")
 
-        with open("playlist_afrique.m3u", "w", encoding="utf-8") as playlist:
-            playlist.write("\n".join(output_lines) + "\n")
-        print(f"Playlist francophone générée : {channel_count} chaînes.")
+        for filename, entries in (
+            ("playlist_afrique.m3u", main_entries),
+            ("playlist_bouquet.m3u", bouquet_entries),
+        ):
+            output_lines = ["#EXTM3U", "#EXTVLCOPT:http-user-agent=Mozilla/5.0"]
+            for metadata, url in entries:
+                output_lines.extend((metadata, url))
+            with open(filename, "w", encoding="utf-8") as playlist:
+                playlist.write("\n".join(output_lines) + "\n")
+
+        print(
+            f"Playlist bilingue générée : {len(main_entries)} chaînes "
+            f"({french_channel_count} françaises, {english_channel_count} anglaises)."
+        )
         for region, count in region_counts.items():
             if count:
                 print(f"{region} : {count} chaînes")
+        print(f"Bouquet gratuit généré : {len(bouquet_entries)} chaînes.")
+        for category, count in sorted(bouquet_counts.items()):
+            if count:
+                print(f"{category} : {count} chaînes")
         PY
 
     - name: Commit and Push changes
       run: |
         git config --global user.name 'GitHub Action'
         git config --global user.email 'action@github.com'
-        git add playlist_afrique.m3u
-        git commit -m "Mise à jour automatique des chaînes francophones" || exit 0
+        git add playlist_afrique.m3u playlist_bouquet.m3u
+        git commit -m "Mise à jour automatique des bouquets IPTV" || exit 0
         git push
