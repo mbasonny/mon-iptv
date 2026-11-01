@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
     - name: Checkout repository
@@ -24,54 +26,87 @@ jobs:
 
     - name: Filter and Organize IPTV
       run: |
-        python -c "
+        python <<'PY'
+        import re
+        import unicodedata
+
         import requests
 
-        url = 'https://iptv-org.github.io/iptv/index.country.m3u'
-        print('Téléchargement de la liste mondiale...')
-        response = requests.get(url)
-        if response.status_code != 200:
-            print('Erreur de téléchargement')
-            exit(1)
+        african_countries = {
+            "Algeria", "Angola", "Benin", "Botswana", "Burkina Faso", "Burundi",
+            "Cabo Verde", "Cameroon", "Central African Republic", "Chad", "Comoros",
+            "Congo", "Democratic Republic of the Congo", "Djibouti", "Egypt",
+            "Equatorial Guinea", "Eritrea", "Eswatini", "Ethiopia", "Gabon",
+            "Gambia", "Ghana", "Guinea", "Guinea-Bissau", "Ivory Coast", "Kenya",
+            "Lesotho", "Liberia", "Libya", "Madagascar", "Malawi", "Mali",
+            "Mauritania", "Mauritius", "Morocco", "Mozambique", "Namibia", "Niger",
+            "Nigeria", "Rwanda", "Sao Tome and Principe", "Senegal", "Seychelles",
+            "Sierra Leone", "Somalia", "South Africa", "South Sudan", "Sudan",
+            "Tanzania", "Togo", "Tunisia", "Uganda", "Zambia", "Zimbabwe",
+        }
+        country_aliases = {
+            "Cape Verde",
+            "Cote d'Ivoire",
+            "Côte d'Ivoire",
+            "Congo-Brazzaville",
+            "DR Congo",
+            "Congo-Kinshasa",
+            "Swaziland",
+            "Sao Tome & Principe",
+            "São Tomé and Príncipe",
+        }
 
-        lines = response.text.splitlines()
-        
-        # Liste des codes ISO ou noms de pays africains à conserver obligatoirement
-        # group-title utilise généralement les noms complets en anglais ou français selon la source.
-        # Pour iptv-org, ce sont les noms de pays standardisés (ex: Cameroon, Côte d'Ivoire, Senegal, Mali, Gabon, Congo, etc.)
-        
-        output_lines = ['#EXTM3U', '#EXTVLCOPT:http-user-agent=Mozilla/5.0']
-        
+        def normalize(value):
+            value = unicodedata.normalize("NFKD", value)
+            value = value.encode("ascii", "ignore").decode("ascii").casefold()
+            return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+        country_names = {normalize(country) for country in african_countries}
+        country_names.update(normalize(alias) for alias in country_aliases)
+
+        response = requests.get(
+            "https://iptv-org.github.io/iptv/index.country.m3u", timeout=60
+        )
+        response.raise_for_status()
+
+        output_lines = ["#EXTM3U", "#EXTVLCOPT:http-user-agent=Mozilla/5.0"]
         current_inf = None
         keep = False
+        channel_count = 0
 
-        for line in lines:
-            if line.startswith('#EXTM3U'):
-                continue
-            if line.startswith('#EXTINF:'):
+        for line in response.text.splitlines():
+            if line.startswith("#EXTINF:"):
                 current_inf = line
-                # On filtre à la volée. Si vous voulez TOUS les pays du monde mais uniquement structurés,
-                # ou juste l'Afrique, modifiez ici. Pour répondre à votre demande 'avec tous les filtres',
-                # ce script nettoie les flux invalides et conserve la structure par pays.
-                # Si vous voulez restreindre à l'Afrique, décommentez la ligne ci-dessous :
-                # if any(country in line for country in ['Cameroon', 'Côte d\'Ivoire', 'Senegal', 'Mali', 'Gabon', 'Congo', 'Benin', 'Togo', 'Guinea', 'Burkina Faso']):
-                keep = True
-            elif line.startswith('http'):
+                group = re.search(r'group-title="([^"]*)"', line)
+                country = group.group(1) if group else ""
+                channel_metadata = normalize(line).split()
+                premium_channel = (
+                    re.search(r"\bcanal\s*\+|\bcanal\s+plus\b", line, re.IGNORECASE)
+                    or "bein" in channel_metadata
+                )
+                keep = (
+                    normalize(country) in country_names
+                    and not premium_channel
+                )
+            elif line.startswith("http"):
                 if keep and current_inf:
-                    output_lines.append(current_inf)
-                    output_lines.append(line)
+                    output_lines.extend((current_inf, line))
+                    channel_count += 1
                 current_inf = None
                 keep = False
 
-        with open('playlist_pays.m3u', 'w', encoding='utf-8') as f:
-            f.write('\n'.join(output_lines))
-        print('Fichier playlist_pays.m3u généré avec succès !')
-        "
+        if channel_count == 0:
+            raise SystemExit("Aucune chaîne africaine trouvée; playlist non générée.")
+
+        with open("playlist_afrique.m3u", "w", encoding="utf-8") as playlist:
+            playlist.write("\n".join(output_lines) + "\n")
+        print(f"Playlist africaine générée : {channel_count} chaînes.")
+        PY
 
     - name: Commit and Push changes
       run: |
         git config --global user.name 'GitHub Action'
         git config --global user.email 'action@github.com'
-        git add playlist_pays.m3u
-        git commit -m "Mise à jour automatique de la playlist IPTV par pays" || exit 0
+        git add playlist_afrique.m3u
+        git commit -m "Mise à jour automatique de la playlist africaine" || exit 0
         git push
