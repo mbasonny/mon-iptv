@@ -29,7 +29,7 @@ jobs:
       run: |
         pip install requests
 
-    - name: Filter and Organize IPTV
+    - name: Select French Channels and Organize by Region
       run: |
         python <<'PY'
         import re
@@ -67,7 +67,8 @@ jobs:
                 "Bermuda", "Bolivia", "Brazil", "Canada", "Chile", "Colombia",
                 "Costa Rica", "Cuba", "Dominica", "Dominican Republic", "Ecuador",
                 "El Salvador", "Grenada", "Guatemala", "Guyana", "Haiti", "Honduras",
-                "Jamaica", "Mexico", "Nicaragua", "Panama", "Paraguay", "Peru",
+                "Guadeloupe", "Jamaica", "Martinique", "Mexico", "Nicaragua",
+                "Panama", "Paraguay", "Peru",
                 "Saint Kitts and Nevis", "Saint Lucia", "Saint Vincent and the Grenadines",
                 "Suriname", "Trinidad and Tobago", "United States", "Uruguay",
                 "Venezuela",
@@ -97,6 +98,7 @@ jobs:
             "Cote d'Ivoire": "Ivory Coast",
             "Côte d'Ivoire": "Ivory Coast",
             "Congo-Brazzaville": "Congo",
+            "Republic of the Congo": "Congo",
             "DR Congo": "Democratic Republic of the Congo",
             "Congo-Kinshasa": "Democratic Republic of the Congo",
             "Swaziland": "Eswatini",
@@ -126,10 +128,27 @@ jobs:
             for alias, country in country_aliases.items()
         )
 
-        response = requests.get(
+        country_response = requests.get(
             "https://iptv-org.github.io/iptv/index.country.m3u", timeout=60
         )
-        response.raise_for_status()
+        country_response.raise_for_status()
+        country_by_channel = {}
+        current_inf = None
+
+        for line in country_response.text.splitlines():
+            if line.startswith("#EXTINF:"):
+                current_inf = line
+            elif line.startswith("http") and current_inf:
+                channel_id = re.search(r'tvg-id="([^"]*)"', current_inf)
+                country = re.search(r'group-title="([^"]*)"', current_inf)
+                if channel_id and country:
+                    country_by_channel[channel_id.group(1)] = country.group(1)
+                current_inf = None
+
+        french_response = requests.get(
+            "https://iptv-org.github.io/iptv/languages/fra.m3u", timeout=60
+        )
+        french_response.raise_for_status()
 
         output_lines = ["#EXTM3U", "#EXTVLCOPT:http-user-agent=Mozilla/5.0"]
         current_inf = None
@@ -138,27 +157,36 @@ jobs:
         region_counts = {region: 0 for region in regions}
         region_counts["Autres"] = 0
 
-        for line in response.text.splitlines():
+        for line in french_response.text.splitlines():
             if line.startswith("#EXTINF:"):
                 current_inf = line
-                group = re.search(r'group-title="([^"]*)"', line)
-                country = group.group(1) if group else ""
+                channel_id = re.search(r'tvg-id="([^"]*)"', line)
+                country = country_by_channel.get(
+                    channel_id.group(1) if channel_id else "", ""
+                )
                 premium_channel = (
                     re.search(r"\bcanal\s*\+|\bcanal\s+plus\b", line, re.IGNORECASE)
                     or re.search(r"\bbein\b", line, re.IGNORECASE)
                 )
                 region = country_regions.get(normalize(country), "Autres")
-                keep = not premium_channel
-                if keep and group:
-                    current_inf = (
-                        line[:group.start(1)]
-                        + region
-                        + line[group.end(1):]
-                    )
-                elif keep:
-                    region = "Autres"
+                keep = bool(channel_id and country and not premium_channel)
 
                 if keep:
+                    group = re.search(r'group-title="([^"]*)"', current_inf)
+                    if group:
+                        current_inf = (
+                            current_inf[:group.start(1)]
+                            + region
+                            + current_inf[group.end(1):]
+                        )
+                    else:
+                        title_separator = current_inf.find(",")
+                        if title_separator != -1:
+                            current_inf = (
+                                current_inf[:title_separator]
+                                + f' group-title="{region}"'
+                                + current_inf[title_separator:]
+                            )
                     current_inf = re.sub(
                         r'(?<!\S)tvg-country="[^"]*"',
                         "",
@@ -166,13 +194,6 @@ jobs:
                     ).rstrip()
                     title_separator = current_inf.find(",")
                     if title_separator != -1:
-                        if not group:
-                            current_inf = (
-                                current_inf[:title_separator]
-                                + ' group-title="Autres"'
-                                + current_inf[title_separator:]
-                            )
-                            title_separator = current_inf.find(",")
                         current_inf = (
                             current_inf[:title_separator]
                             + f' tvg-country="{country}"'
@@ -191,7 +212,7 @@ jobs:
 
         with open("playlist_afrique.m3u", "w", encoding="utf-8") as playlist:
             playlist.write("\n".join(output_lines) + "\n")
-        print(f"Playlist générée : {channel_count} chaînes.")
+        print(f"Playlist francophone générée : {channel_count} chaînes.")
         for region, count in region_counts.items():
             if count:
                 print(f"{region} : {count} chaînes")
@@ -202,5 +223,5 @@ jobs:
         git config --global user.name 'GitHub Action'
         git config --global user.email 'action@github.com'
         git add playlist_afrique.m3u
-        git commit -m "Mise à jour automatique des chaînes par région" || exit 0
+        git commit -m "Mise à jour automatique des chaînes francophones" || exit 0
         git push
