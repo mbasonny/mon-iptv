@@ -1,6 +1,9 @@
 name: Update IPTV Playlist
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: '0 0 * * *' # S'exécute tous les jours à minuit
   workflow_dispatch: # Permet un déclenchement manuel depuis l'interface GitHub
